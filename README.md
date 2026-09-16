@@ -274,9 +274,12 @@ BROWSER_HEAD=1 cargo test --features live-ceremony --test ceremony -- --ignored 
 ```
 
 In CI (`ceremony.yml`) pull requests run the rungs that need no account; the
-scheduled and dispatched runs add the GitHub authorization, one rung at a
-time. The X authorization runs only on a manual dispatch with the `x` input
-set. Each job is skipped where its secrets are absent.
+nightly and dispatched runs add the GitHub authorization, one rung at a time.
+The X authorization runs weekly and on a dispatch with the `x` input set, and
+only from the saved session: an unattended run never opens X's sign-in pages,
+because X examines a fresh sign-in and has questions a test cannot answer. A
+run whose saved session no longer authenticates says so and names the export
+above. Each job is skipped where its secrets are absent.
 
 ## Building from source
 

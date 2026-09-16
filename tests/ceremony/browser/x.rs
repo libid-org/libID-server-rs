@@ -212,6 +212,11 @@ impl Authorization<'_> {
     /// the session: the `_COOKIES` value for the next runs, as base64 of the
     /// cookie list.
     pub async fn fresh_cookies(&self) -> String {
+        // The sign-in is where X asks its questions, so a person watches it.
+        assert!(
+            headed(),
+            "the export signs in through X's own pages: run it with BROWSER_HEAD=1"
+        );
         let mut session = Session::open(self).await;
         self.sign_in(&mut session).await;
         let cookies: Vec<StoredCookie> = session
@@ -534,6 +539,15 @@ impl Platform for Authorization<'_> {
     async fn authorize(&self, session: &mut Session) -> String {
         let started = Instant::now();
         if !self.restored(session).await {
+            // X examines a fresh sign-in, and a run nobody is watching has no
+            // answer for what it asks. The saved session is the way in.
+            assert!(
+                headed(),
+                "the saved X session does not authenticate: set X_TEST_ALICE_COOKIES \
+                 from a headed export, `BROWSER_HEAD=1 cargo test --features \
+                 live-ceremony --test ceremony -- --ignored --nocapture \
+                 a_fresh_x_session`"
+            );
             self.sign_in(session).await;
         }
         tokio::time::sleep(Duration::from_secs(4)).await;
@@ -548,6 +562,12 @@ impl Platform for Authorization<'_> {
 
         while started.elapsed() < budget() {
             if let Some(url) = redirect.seen() {
+                if consented.is_none() {
+                    eprintln!(
+                        "X redirected without asking for consent: the app is \
+                         already authorized for this account"
+                    );
+                }
                 return url;
             }
             let url = session.location().await;
@@ -563,6 +583,13 @@ impl Platform for Authorization<'_> {
             }
 
             if path.starts_with("/i/oauth2/authorize") {
+                if consented.is_none() {
+                    eprintln!(
+                        "X asked for consent {:?} after the authorization page \
+                         was opened",
+                        started.elapsed()
+                    );
+                }
                 session.evaluate(X_CONSENT).await;
                 if consented.is_none_or(|at| at.elapsed() > Duration::from_secs(10))
                     && session.evaluate(CONSENT_CLICK).await == "clicked"

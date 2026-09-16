@@ -3,14 +3,17 @@ name: Live ceremony
 # The suite behind `--features live-ceremony`: real MPC-TLS sessions through
 # an in-process notary against github.com and api.x.com, the bridge under
 # test publishing the configuration. Pull requests run the refusal rungs;
-# the scheduled and dispatched runs add the GitHub authorization rung; a
-# dispatch with the `x` input runs the X authorization rung. Not a required
-# check.
+# the nightly and dispatched runs add the GitHub authorization rung; the X
+# authorization rung runs weekly and on a dispatch with the `x` input, from
+# the saved X session alone. Not a required check.
 
 on:
   pull_request:
   schedule:
+    # Every night; Sunday's run adds the X rung, whose saved session and
+    # whose account degrade over months rather than days.
     - cron: "17 4 * * *"
+    - cron: "47 4 * * 0"
   workflow_dispatch:
     inputs:
       x:
@@ -19,7 +22,8 @@ on:
         default: false
 
 concurrency:
-  group: ceremony-${{ github.head_ref || github.ref }}
+  # The two schedules land on the same ref and must not cancel each other.
+  group: ceremony-${{ github.head_ref || github.ref }}-${{ github.event.schedule }}
   cancel-in-progress: true
 
 env:
@@ -78,7 +82,9 @@ jobs:
   full:
     name: Every rung
     needs: gate
-    if: needs.gate.outputs.go == 'true' && github.event_name != 'pull_request'
+    if: >-
+      needs.gate.outputs.go == 'true' && github.event_name != 'pull_request' &&
+      github.event.schedule != '47 4 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -107,7 +113,13 @@ jobs:
   x:
     name: X rung
     needs: gate
-    if: needs.gate.outputs.x == 'true' && github.event_name == 'workflow_dispatch' && inputs.x
+    # The authorization runs from the saved session, never from a sign-in: X
+    # examines a fresh one, and a run nobody is watching has no answer for
+    # what it asks.
+    if: >-
+      needs.gate.outputs.x == 'true' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.x) ||
+       (github.event_name == 'schedule' && github.event.schedule == '47 4 * * 0'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
