@@ -1,1 +1,4 @@
 /target
+# Local configuration and secrets.
+/bridge.toml
+/.env*
