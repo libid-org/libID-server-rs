@@ -142,5 +142,15 @@ jobs:
           X_TEST_ALICE_EMAIL: ${{ secrets.X_TEST_ALICE_EMAIL }}
           X_TEST_ALICE_COOKIES: ${{ secrets.X_TEST_ALICE_COOKIES }}
           CHROME: /usr/bin/google-chrome
+          X_CHALLENGE_TRACE: ${{ runner.temp }}/x-challenge
         run: |
           cargo test --features live-ceremony --test ceremony -- --test-threads=1 --nocapture x_authorization
+
+      - name: Challenge screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: x-challenge-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/x-challenge/x-challenge.png
+          if-no-files-found: ignore
+          retention-days: 1

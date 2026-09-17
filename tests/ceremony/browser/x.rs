@@ -28,6 +28,7 @@ use chromiumoxide::{
             CookieParam,
             CookieSameSite,
             Headers,
+            SetCookiesParams,
             SetExtraHttpHeadersParams,
             TimeSinceEpoch,
         },
@@ -329,40 +330,21 @@ impl Authorization<'_> {
         false
     }
 
-    /// The saved session, set in Chrome and honoured by `x.com/home`.
+    /// Install cookies on the blank page; authorization itself checks the session.
     async fn restored(&self, session: &Session) -> bool {
         if self.account.cookies.is_empty() {
             return false;
         }
-        let _ = tokio::time::timeout(
-            Duration::from_secs(10),
-            session.page.goto("https://x.com/"),
-        )
-        .await;
         let params: Vec<CookieParam> = HOSTS
             .iter()
             .flat_map(|host| self.account.cookies.iter().map(|c| c.param(host)))
             .collect();
         session
             .page
-            .set_cookies(params)
+            .execute(SetCookiesParams::new(params))
             .await
             .expect("Chrome takes the saved session's cookies");
-        session.navigate("https://x.com/home").await;
-        let restored = Self::signed_in_within(session, Duration::from_secs(20)).await;
-        session.trace("restored").await;
-        if !restored {
-            eprintln!(
-                "the saved session was not honoured; signing in. Page: {}",
-                session
-                    .body_text()
-                    .await
-                    .chars()
-                    .take(200)
-                    .collect::<String>()
-            );
-        }
-        restored
+        true
     }
 
     /// Sign in through X's own pages: a web search for X, its result in the
@@ -598,9 +580,8 @@ impl Platform for Authorization<'_> {
         self.state
     }
 
-    /// A signed-in X, then the authorization URL from the page's own
-    /// scripts, the consent button, and whatever X puts in the way until
-    /// the redirect is requested: a sign-in page once, Cloudflare's check.
+    /// Restore cookies and navigate directly to OAuth, without visiting home.
+    /// Observe security challenges separately from an explicit login request.
     async fn authorize(&self, session: &mut Session) -> String {
         let started = Instant::now();
         if !self.restored(session).await {
@@ -608,22 +589,19 @@ impl Platform for Authorization<'_> {
             // answer for what it asks. The saved session is the way in.
             assert!(
                 headed(),
-                "the saved X session does not authenticate: set X_TEST_ALICE_COOKIES \
+                "no saved X session supplied: set X_TEST_ALICE_COOKIES \
                  from a headed export, `BROWSER_HEAD=1 cargo test --features \
                  live-ceremony --test ceremony -- --ignored --nocapture \
                  a_fresh_x_session`"
             );
             self.sign_in(session).await;
         }
-        tokio::time::sleep(Duration::from_secs(4)).await;
-        session.evaluate("window.scrollBy(0, 200)").await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
         let mut redirect = session.watch_redirect(self.redirect_uri).await;
         session.navigate(&self.url()).await;
         let mut consented: Option<Instant> = None;
         let mut signed_in_again = false;
         let mut last_path = String::new();
+        let mut challenged: Option<Instant> = None;
 
         while started.elapsed() < budget() {
             if let Some(url) = redirect.seen() {
@@ -647,6 +625,23 @@ impl Platform for Authorization<'_> {
                 last_path = path.clone();
             }
 
+            let text = session.body_text().await;
+            if security_challenge(&text) {
+                if challenged.is_none() {
+                    eprintln!("X security verification appeared; allowing 90 seconds to complete");
+                }
+                let since = challenged.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_secs(90) {
+                    challenge_diagnostics(session).await;
+                    panic!("X security verification did not clear within 90 seconds; cookie validity is unknown");
+                }
+                tokio::time::sleep(POLL).await;
+                continue;
+            }
+            if challenged.take().is_some() {
+                eprintln!("X security verification cleared");
+            }
+
             if path.starts_with("/i/oauth2/authorize") {
                 if consented.is_none() {
                     eprintln!(
@@ -663,11 +658,13 @@ impl Platform for Authorization<'_> {
                         session.page.find_element("[data-libid-consent='1']").await
                     {
                         if button.click().await.is_ok() {
+                            eprintln!("X consent clicked through browser input");
                             consented = Some(Instant::now());
                         }
                     }
                 }
             } else if path.starts_with("/i/flow/login") || path == "/login" {
+                assert!(headed(), "X requested login after cookie restoration; renew the saved session interactively");
                 assert!(
                     !signed_in_again,
                     "X asked to sign in twice. Page: {}",
@@ -687,24 +684,53 @@ impl Platform for Authorization<'_> {
                 let text = session.body_text().await;
                 assert!(
                     !text.contains("Something went wrong"),
-                    "X answered an error on {url}. Page: {}",
-                    text.chars().take(400).collect::<String>()
+                    "X answered an error on the authorization path"
                 );
             }
             tokio::time::sleep(POLL).await;
         }
 
         panic!(
-            "no authorization in {:?}.\nstopped on: {}\npage said: {}",
-            budget(),
-            session.location().await,
-            session
-                .body_text()
-                .await
-                .chars()
-                .take(400)
-                .collect::<String>()
+            "X authorization did not finish within {:?}; last path: {last_path}",
+            budget()
         );
+    }
+}
+
+/// Provider security checks are not evidence that the saved session expired.
+fn security_challenge(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "performing security verification",
+        "verify you are human",
+        "verifies you are not a bot",
+        "checking your browser",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+/// Only structural diagnostics enter logs: no URL query, cookies, or page text.
+/// An optional screenshot is captured only while the challenge is visible.
+async fn challenge_diagnostics(session: &Session) {
+    let summary = session.evaluate(r#"JSON.stringify({
+        challengeFrame: !!document.querySelector('iframe[src*="challenges.cloudflare.com"]'),
+        checkbox: !!document.querySelector('input[type="checkbox"],[role="checkbox"]'),
+        passwordField: !!document.querySelector('input[type="password"]'),
+        consentControl: !!document.querySelector('[data-libid-consent]'),
+        readyState: document.readyState
+    })"#).await;
+    eprintln!("X challenge diagnostics: {summary}");
+    if let Ok(dir) = std::env::var("X_CHALLENGE_TRACE") {
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(png) = session
+            .page
+            .screenshot(chromiumoxide::page::ScreenshotParams::builder().build())
+            .await
+        {
+            let _ =
+                std::fs::write(std::path::Path::new(&dir).join("x-challenge.png"), png);
+        }
     }
 }
 
@@ -942,5 +968,20 @@ impl Jitter {
     /// A value in `[0, 1)`.
     fn unit(&mut self) -> f64 {
         (self.next() >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+#[cfg(test)]
+mod challenge_tests {
+    use super::security_challenge;
+
+    #[test]
+    fn security_checks_are_distinct_from_login_and_consent() {
+        assert!(security_challenge("x.com Performing security verification"));
+        assert!(security_challenge("Verify you are human"));
+        assert!(!security_challenge("Log in to X Password Forgot password?"));
+        assert!(!security_challenge(
+            "App wants to access your account Cancel Authorize app"
+        ));
     }
 }

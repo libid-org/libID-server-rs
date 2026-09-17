@@ -265,6 +265,7 @@ the same way. It reads its own variables:
 | `X_TEST_ALICE_EMAIL` | Its e-mail address, typed when X asks for it on a sign-in it examines. |
 | `X_TEST_ALICE_COOKIES` | The saved session the rung restores. An unattended run has no other way in. The value is what either export below prints. |
 | `X_COOKIE_EXPORT` | The cookies a browser exported, for the converter below. |
+| `X_CHALLENGE_TRACE` | Optional directory for a screenshot only when X security verification times out. CI retains this diagnostic for one day; logs contain structural indicators, not page text or OAuth URLs. |
 | `BROWSER_TRACE` | Optional: a directory; the driver writes a numbered screenshot and a dump of the page's controls and text into it at each step. |
 
 The session comes from a browser a person signed in with. Export the `x.com`
