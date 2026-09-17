@@ -657,9 +657,15 @@ impl Platform for Authorization<'_> {
                 }
                 session.evaluate(X_CONSENT).await;
                 if consented.is_none_or(|at| at.elapsed() > Duration::from_secs(10))
-                    && session.evaluate(CONSENT_CLICK).await == "clicked"
+                    && session.evaluate(CONSENT_CLICK).await == "ready"
                 {
-                    consented = Some(Instant::now());
+                    if let Ok(button) =
+                        session.page.find_element("[data-libid-consent='1']").await
+                    {
+                        if button.click().await.is_ok() {
+                            consented = Some(Instant::now());
+                        }
+                    }
                 }
             } else if path.starts_with("/i/flow/login") || path == "/login" {
                 assert!(
@@ -751,11 +757,24 @@ const NEXT_BUTTON: &str = r#"(() => {
     return 'not_found';
 })()"#;
 
-/// The consent button clicked from the page's own scripts.
+/// Mark the visible, enabled consent control for a browser input click.
+/// X also serves a consent page without `OAuth_Consent_Button`.
 const CONSENT_CLICK: &str = r#"(() => {
-    const button = document.querySelector("[data-testid='OAuth_Consent_Button']");
-    if (button) { button.click(); return 'clicked'; }
-    return 'absent';
+    document.querySelectorAll('[data-libid-consent]').forEach(e => e.removeAttribute('data-libid-consent'));
+    const candidates = [...document.querySelectorAll("[data-testid='OAuth_Consent_Button'],button,[role=button],input[type=submit],a")];
+    const button = candidates.find(e =>
+        (e.getAttribute('data-testid') === 'OAuth_Consent_Button' ||
+         /^(authorize app)$/i.test((e.innerText || e.value || '').trim())) &&
+        !e.disabled && e.getAttribute('aria-disabled') !== 'true' &&
+        e.getClientRects().length > 0);
+    if (button) {
+        button.setAttribute('data-libid-consent', '1');
+        return 'ready';
+    }
+    const controls = [...document.querySelectorAll('button,[role=button],input[type=submit],a')]
+        .map(e => `${e.tagName}|${e.getAttribute('data-testid') || ''}|${(e.innerText||e.value||'').trim().slice(0,40)}`)
+        .filter(d => d.length > 4);
+    return 'absent: ' + controls.join(' ;; ').slice(0, 600);
 })()"#;
 
 /// Whether `selector` appears on the page within `within`.
