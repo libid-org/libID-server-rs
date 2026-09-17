@@ -263,15 +263,26 @@ the same way. It reads its own variables:
 | `LIBID_TEST_X_REDIRECT_URI` | The redirect URI registered on that app, byte for byte. |
 | `X_TEST_ALICE_USERNAME`, `X_TEST_ALICE_PASSWORD` | The X test account. |
 | `X_TEST_ALICE_EMAIL` | Its e-mail address, typed when X asks for it on a sign-in it examines. |
-| `X_TEST_ALICE_COOKIES` | Optional: a saved session, which the rung restores instead of signing in. The value is what the export prints. |
+| `X_TEST_ALICE_COOKIES` | The saved session the rung restores. An unattended run has no other way in. The value is what either export below prints. |
+| `X_COOKIE_EXPORT` | The cookies a browser exported, for the converter below. |
 | `BROWSER_TRACE` | Optional: a directory; the driver writes a numbered screenshot and a dump of the page's controls and text into it at each step. |
 
-The export signs in once in a visible Chrome, where a person may complete
-whatever X asks of a new sign-in, and prints the value:
+The session comes from a browser a person signed in with. Export the `x.com`
+cookies from it, as a list or as Playwright's `storageState`, and convert:
+
+```sh
+X_COOKIE_EXPORT=x.com.json cargo test --features live-ceremony --test ceremony -- --ignored --nocapture a_browser_export
+```
+
+The suite can also sign in itself, in a visible Chrome where a person
+completes whatever X asks, and print the same value:
 
 ```sh
 BROWSER_HEAD=1 cargo test --features live-ceremony --test ceremony -- --ignored --nocapture a_fresh_x_session
 ```
+
+X examines a sign-in it did not expect, so the browser a person already uses
+is the surer of the two.
 
 In CI (`ceremony.yml`) pull requests run the rungs that need no account; the
 nightly and dispatched runs add the GitHub authorization, one rung at a time.

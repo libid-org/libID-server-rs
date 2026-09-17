@@ -89,6 +89,71 @@ const FLAGS: &[&str] = &[
 /// What every new document runs before the page's own scripts.
 const STEALTH: &str = include_str!("stealth.js");
 
+/// A cookie list exported from a browser, as the `X_TEST_ALICE_COOKIES`
+/// value: base64 of the shape [`Account::from_env`] reads.
+///
+/// The input is what a browser or its extensions hand out -- a bare list, or
+/// an object carrying one under `cookies` -- with the field names either
+/// spelling uses. Only `x.com` is kept, and a list without the session cookie
+/// is refused: it would restore nothing.
+pub fn secret_from_export(export: &str) -> String {
+    let document: serde_json::Value =
+        serde_json::from_str(export).expect("the export is JSON");
+    let list = document
+        .get("cookies")
+        .unwrap_or(&document)
+        .as_array()
+        .expect("the export is a cookie list, or carries one under `cookies`")
+        .clone();
+
+    let cookies: Vec<StoredCookie> = list
+        .iter()
+        .filter_map(|c| {
+            let field = |names: [&str; 2]| {
+                names
+                    .iter()
+                    .find_map(|n| c.get(*n))
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let domain = field(["domain", "Domain"]);
+            let domain = domain.as_str()?;
+            if !domain.trim_start_matches('.').ends_with("x.com") {
+                return None;
+            }
+            let same_site = field(["sameSite", "same_site"]);
+            let same_site = match same_site.as_str().unwrap_or_default() {
+                s if s.eq_ignore_ascii_case("strict") => Some(CookieSameSite::Strict),
+                s if s.eq_ignore_ascii_case("lax") => Some(CookieSameSite::Lax),
+                s if s.eq_ignore_ascii_case("none")
+                    || s.eq_ignore_ascii_case("no_restriction") =>
+                {
+                    Some(CookieSameSite::None)
+                }
+                // `unspecified`, and whatever else an exporter writes.
+                _ => Option::None,
+            };
+            Some(StoredCookie {
+                name: field(["name", "Name"]).as_str()?.to_owned(),
+                value: field(["value", "Value"]).as_str()?.to_owned(),
+                domain: domain.to_owned(),
+                path: field(["path", "Path"]).as_str().unwrap_or("/").to_owned(),
+                secure: field(["secure", "Secure"]).as_bool().unwrap_or(true),
+                http_only: field(["httpOnly", "http_only"]).as_bool().unwrap_or(false),
+                same_site,
+                expires: field(["expirationDate", "expires"]).as_f64().unwrap_or(0.0),
+            })
+        })
+        .collect();
+
+    assert!(
+        cookies.iter().any(|c| c.name == "auth_token"),
+        "the export carries no auth_token cookie for x.com, so it restores no session"
+    );
+    base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(&cookies).expect("a cookie list serializes"))
+}
+
 /// The two hosts a session's cookies are set for.
 const HOSTS: [&str; 2] = ["x.com", "twitter.com"];
 

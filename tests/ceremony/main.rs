@@ -360,6 +360,23 @@ async fn a_real_x_authorization_yields_two_sessions_the_notary_attested() {
     grant.closed().await;
 }
 
+/// Turn a cookie list exported from a browser into the
+/// `X_TEST_ALICE_COOKIES` value, so the session a person signed in for is the
+/// one the rung restores:
+/// `X_COOKIE_EXPORT=x.com.json cargo test --features live-ceremony --test
+/// ceremony -- --ignored --nocapture a_browser_export`.
+#[tokio::test]
+#[ignore]
+async fn a_browser_export_becomes_the_x_secret() {
+    let path = required("X_COOKIE_EXPORT");
+    let export = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{path} is a cookie export this test reads: {e}"));
+    println!(
+        "X_TEST_ALICE_COOKIES={}",
+        browser::x::secret_from_export(&export)
+    );
+}
+
 /// Sign in as the X test account through X's own pages and print the session
 /// as the `X_TEST_ALICE_COOKIES` value. Run by name, ignored otherwise:
 /// `BROWSER_HEAD=1 cargo test --features live-ceremony --test ceremony --
